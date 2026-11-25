@@ -485,7 +485,7 @@ function shell(content){applySettings();$('#app').innerHTML=screenHeader()+`<mai
 const CINEMATIC_MIN_RATE=0.45;
 const CINEMATIC_MAX_SLOW_RATE=1.25;
 const cinematicSyncHandlers=new WeakMap();
-function syncSilentVideoToNarration(video,voice,targetSeconds=null){
+function syncSilentVideoToNarration(video,voice,targetSeconds=null,repeatScene=false){
  if(!video)return;
  const previous=cinematicSyncHandlers.get(video);
  if(previous){video.removeEventListener('loadedmetadata',previous.apply);previous.voice?.removeEventListener('loadedmetadata',previous.apply)}
@@ -496,17 +496,17 @@ function syncSilentVideoToNarration(video,voice,targetSeconds=null){
   // 0,45x é um limite de conforto visual. Quando não basta, o vídeo repete.
   // Se o vídeo for mais longo que a fala, preferir até 1x para não estender a cena.
   const natural=Number.isFinite(t)&&t>0?v/t:CINEMATIC_MAX_SLOW_RATE;
-  const rate=Math.max(CINEMATIC_MIN_RATE,Math.min(CINEMATIC_MAX_SLOW_RATE,natural));
+  const rate=repeatScene?Math.max(0.45,Math.min(0.85,natural)):Math.max(CINEMATIC_MIN_RATE,Math.min(CINEMATIC_MAX_SLOW_RATE,natural));
   video.defaultPlaybackRate=rate;
   try{video.playbackRate=rate}catch(e){console.warn('Velocidade não suportada, mantendo reprodução:',e)}
-  video.loop=false;
+  video.loop=repeatScene&&!!voice;
   video.dataset.cinematicRate=rate.toFixed(3);
-  video.dataset.cinematicLoop='reproduzir-uma-vez';
+  video.dataset.cinematicLoop=video.loop?'ate-fim-da-narracao':'reproduzir-uma-vez';
  };
  video.addEventListener('loadedmetadata',apply);
  if(voice)voice.addEventListener('loadedmetadata',apply);
  cinematicSyncHandlers.set(video,{apply,voice});
- video.loop=false;
+ video.loop=repeatScene&&!!voice;
  apply();
 }
 let introCompleted=false;
@@ -1662,7 +1662,7 @@ function showCinematic({src,title,skipLabel,after,code=null,captionClip=null,req
   stopVideo();
   still.src=currentFallback;still.hidden=true;video.style.display='block';
   video.poster=currentFallback;
-  video.onended=()=>{if(done)return;label.textContent=title+' · ANIMAÇÃO CONCLUÍDA · A NARRAÇÃO CONTINUA';showFrame(currentFallback)};
+  video.onended=()=>{if(done)return;if(voice&&!voiceFinished){video.currentTime=0;videoFinished=false;if(!manuallyPaused)playVideo();return}videoFinished=true;maybeFinish()};
   video.onerror=()=>{if(done)return;label.textContent='VÍDEO INDISPONÍVEL. A EXPLICAÇÃO CONTINUA COM A IMAGEM.';showFrame(currentFallback)};
   video.onplaying=()=>{if(!done&&!manuallyPaused)label.textContent=title+' · VÍDEO EM REPRODUÇÃO'};
   video.onwaiting=()=>{if(!done&&!manuallyPaused)label.textContent=title+' · CARREGANDO ANIMAÇÃO...'};
@@ -1670,13 +1670,13 @@ function showCinematic({src,title,skipLabel,after,code=null,captionClip=null,req
   if(code){
     const digits=overlay.querySelector('.final-code-digits'),result=overlay.querySelector('.final-code-result');
     digits.innerHTML=Array.from(code,()=>'<b>·</b>').join('');
-    video.ontimeupdate=()=>{const t=video.currentTime;Array.from(digits.children).forEach((el,i)=>el.textContent=t>1+i*.55?code[i]:'·');result.textContent=t>5?(stage===0?'CÓDIGO VALIDADO':'ACESSO LIBERADO · FÁBRICA REATIVADA'):'';};
+    video.ontimeupdate=()=>{const t=voice?Math.max(0,voice.currentTime-(stage===1?nextAt:0)):video.currentTime;Array.from(digits.children).forEach((el,i)=>el.textContent=t>1+i*.55?code[i]:'·');result.textContent=t>5?(stage===0?'CÓDIGO VALIDADO':'ACESSO LIBERADO · FÁBRICA REATIVADA'):'';};
   }
   video.src=source;
   // Cada trecho da ponte usa somente sua janela da narração (sem reiniciar o MP3).
   const tailSeconds=stage===1&&nextSrc&&voice&&Number.isFinite(voice.duration)?Math.max(0.1,voice.duration-nextAt):null;
   const segmentSeconds=nextSrc?(stage===0?nextAt:tailSeconds):null;
-  syncSilentVideoToNarration(video,voice,segmentSeconds);
+  syncSilentVideoToNarration(video,voice,segmentSeconds,true);
   try{video.load()}catch(e){console.warn('Falha ao carregar vídeo:',e);showFrame(currentFallback);return}
   if(!manuallyPaused)playVideo();
  }
@@ -1714,7 +1714,7 @@ function showCinematic({src,title,skipLabel,after,code=null,captionClip=null,req
     setScene(nextSrc,nextFallbackImage||frameForVideo(nextSrc));
    }
   };
-  voice.onended=()=>{voiceFinished=true;voiceFailed=false;narrating=false;duckAmbience(false);videoFinished=true;video.pause();maybeFinish()};
+  voice.onended=()=>{voiceFinished=true;voiceFailed=false;narrating=false;duckAmbience(false);videoFinished=true;video.loop=false;video.pause();maybeFinish()};
   voice.onerror=()=>{voiceFailed=true;narrating=false;duckAmbience(false);label.textContent='NARRAÇÃO INDISPONÍVEL. RETOME OU LEIA A EXPLICAÇÃO.';syncButtons()};
  }
  // Se o navegador parar de decodificar, mantém a imagem e deixa a fala terminar.
@@ -1738,7 +1738,7 @@ function showCinematic({src,title,skipLabel,after,code=null,captionClip=null,req
  },1500);
  overlay.addEventListener('cinematic-cleanup',()=>clearInterval(narrationWatchdog),{once:true});
  setScene(src,fallbackImage||frameForVideo(src));
- if(voice&&(settings.autoNarrate||settings.captions))playVoice();
+ if(voice)playVoice();
  else if(voice&&requireFullPlayback)label.textContent='NARRAÇÃO DESLIGADA. CLIQUE EM LER EXPLICAÇÃO PARA CONTINUAR.';
  updateAccessControls();syncButtons();maybeFinish();return true;
 }
